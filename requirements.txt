@@ -17,3 +17,4 @@ ratelimit
 vllm
 python-docx
 docx
+mpi4py

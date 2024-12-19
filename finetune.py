@@ -1,25 +1,37 @@
 # This code is based on the revised code from fastchat based on tatsu-lab/stanford_alpaca.
-from dataclasses import dataclass, field
-import netrc
+import os
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
+os.environ["TORCH_CPP_BUILD_LOG"] = "0"
+os.environ["TORCH_DISTRIBUTED_DEBUG"] = "OFF"
+os.environ["OMP_NUM_THREADS"]="1"
+os.environ["DEEPSPEED_LOG_LEVEL"] = "ERROR"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
 import time
 import json
-import math
 import random
 import logging
-import os
+import numpy as np
 from typing import Literal
 from typing import Dict, Optional, List
+from rich.logging import RichHandler
 from wandb.sdk import login
+from dataclasses import dataclass, field
 from utils.helper import is_wandb_logged_in
+import warnings
+warnings.filterwarnings("ignore")
+import datasets
+datasets.disable_progress_bar()
+
 import torch
-from torch.utils.data import Dataset
-from deepspeed import zero
-from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 import transformers
-from transformers import Trainer, GPTQConfig, deepspeed
+from deepspeed import zero
+from torch.utils.data import Dataset
+from transformers import Trainer, GPTQConfig, deepspeed, TrainerCallback
 from transformers.trainer_pt_utils import LabelSmoother
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from accelerate.utils import DistributedType
+from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
 torch.cuda.empty_cache()
 random.seed(42)
@@ -224,7 +236,7 @@ class SupervisedDataset(Dataset):
     def __init__(self, raw_data, tokenizer: transformers.PreTrainedTokenizer, max_len: int):
         super(SupervisedDataset, self).__init__()
 
-        rank0_print("Formatting inputs...")
+        # rank0_print("Formatting inputs...")
         sources = [example["conversations"] for example in raw_data]
         data_dict = preprocess(sources, tokenizer, max_len)
 
@@ -253,7 +265,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_len = max_len
 
-        rank0_print("Formatting inputs...Skip in lazy mode")
+        # rank0_print("Formatting inputs...Skip in lazy mode")
         self.tokenizer = tokenizer
         self.raw_data = raw_data
         self.cached_data_dict = {}
@@ -283,14 +295,15 @@ def make_supervised_data_module(
     dataset_cls = (
         LazySupervisedDataset if data_args.lazy_preprocess else SupervisedDataset
     )
-    rank0_print("Loading data...")
+    # rank0_print("Loading data...")
 
     assert data_args.data_path.endswith(".jsonl"), "Only jsonl format is supported as input data."
     train_json = [json.loads(line) for line in open(data_args.data_path, "r")]
+    logging.info(f"数据{data_args.data_path}加载成功！数据量：{len(train_json)}")
+    train_json = random.sample(train_json, 200)
     train_dataset = dataset_cls(train_json, tokenizer=tokenizer, max_len=max_len)
 
     if data_args.validation:
-        logging.info("Using validation dataset while training")
         eval_json = random.sample(
             train_json, 
             data_args.validation_size,
@@ -355,7 +368,7 @@ def train():
     ddp = world_size != 1
     if lora_args.q_lora:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)} if ddp else "auto"
-        logging.info(f"Device map is {device_map}")
+        # logging.info(f"Device map is {device_map}")
         if len(training_args.fsdp) > 0 or deepspeed.is_deepspeed_zero3_enabled():
             logging.warning(
                 "FSDP or ZeRO3 are incompatible with QLoRA."
@@ -402,6 +415,7 @@ def train():
         use_fast=False,
         trust_remote_code=True,
     )
+    logging.info(f"模型加载成功")
     # TODO think about why we would ever want to do this 
     # tokenizer.pad_token_id = tokenizer.eod_id
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -435,7 +449,7 @@ def train():
             )
 
         model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        # model.print_trainable_parameters()
 
         # If the preferred batch size fits into memory, there’s no reason 
         # to apply memory-optimizing techniques because they can slow down the training
@@ -451,23 +465,80 @@ def train():
         max_len=training_args.model_max_length
     )
     
+    
+    training_args.disable_tqdm = False
+    training_args.log_level="error"
+    training_args.log_level_replica="error"
+    
+    from transformers.trainer_callback import ProgressCallback
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if state.is_local_process_zero and self.training_bar is not None:
+            _ = logs.pop("total_flos", None)
+    ProgressCallback.on_log = on_log
+    
     # Starting the trainner
     trainer = Trainer(
         model=model, 
         tokenizer=tokenizer, 
         args=training_args, 
+        # callbacks=[TrainingProgressCallback(1000)],
         **data_module
     )
+    
 
     trainer.train()
     trainer.save_state()
-
+    
     safe_save_model_for_hf_trainer(
         trainer=trainer, 
         output_dir=training_args.output_dir, 
         bias=lora_args.lora_bias
         )
+    
+    # Extract loss values from log history
+    losses = [
+        log["loss"] for log in trainer.state.log_history if "loss" in log
+        ]
+    np.save(
+        f"""losses/training_losses_{
+            data_args.data_path.split(".")[0].split("_")[-1]
+            }.npy""", 
+        np.array(losses)
+        )
+
+# Setup logging
+def setup_logging():
+    """
+    Set up logging to write detailed logs to a file and clean outputs to another file.
+    INFO level messages will be green in the console output.
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)  # Log everything to the debug log file
+
+    # Rich handler for console output (INFO messages styled green)
+    console_handler = RichHandler(
+        level=logging.INFO, 
+        show_path=False,  # Optional: Hides the file path in the console output
+        markup=True       # Enables Rich markup for color formatting
+    )
+    console_handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(console_handler)
+
+    # Set HuggingFace and other library logs to ERROR for detailed logs
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("datasets").setLevel(logging.ERROR)
+    logging.getLogger("torch").setLevel(logging.ERROR)
+    logging.getLogger("deepspeed").setLevel(logging.ERROR)
+    logging.getLogger("accelerate").setLevel(logging.ERROR)
 
 
 if __name__ == "__main__":
+    setup_logging()
+    start_time = time.time()
+    logging.info(f"微调启动时间{time.strftime('%Y-%m-%d %H:%M:%S')}")
     train()
+    logging.info(f"微调结束时间{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    end_time = time.time()
+    elapsed_time_hours = (end_time - start_time) / 3600
+    logging.info(f"微调总耗时: {elapsed_time_hours:.2f} 小时")
+    logging.info("="*100)

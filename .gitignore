@@ -1,1 +1,6 @@
-红色文本入库
+datasets
+**/__pycache__/
+output
+losses
+.vscode
+log.txt
