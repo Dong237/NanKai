@@ -300,7 +300,6 @@ def make_supervised_data_module(
     assert data_args.data_path.endswith(".jsonl"), "Only jsonl format is supported as input data."
     train_json = [json.loads(line) for line in open(data_args.data_path, "r")]
     logging.info(f"数据{data_args.data_path}加载成功！数据量：{len(train_json)}")
-    train_json = random.sample(train_json, 200)
     train_dataset = dataset_cls(train_json, tokenizer=tokenizer, max_len=max_len)
 
     if data_args.validation:
