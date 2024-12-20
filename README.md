@@ -1,5 +1,7 @@
 # KnowledgeUpdate
 
+[中文版本](README.zh-CN.md) | [English Version](README.md)
+
 This is the Repo for updating the knowledge of LLMs through LoRA finetuning with time limit of 1 day
 
 ## Table of Contents
@@ -29,7 +31,7 @@ This is the Repo for updating the knowledge of LLMs through LoRA finetuning with
 
 ## Setup
 
- In a conda env with pytorch available, run:
+In a conda env, run:
 
 ```
 pip install -r requirements.txt
@@ -72,7 +74,7 @@ The fine-tuning process involves customizing a pre-trained model to improve its 
 
 ### Fine-tuning Process
 
-The fine-tuning Python script (`finetune.py`) relies on the Hugging Face Transformers library and several other libraries like `deepspeed`, `wandb`, and `peft` for LoRA support. Here is a summary of the main script features:
+The fine-tuning Python script (`finetune.py`) relies on the Hugging Face Transformers library and several other libraries like `deepspeed` and `peft` for LoRA support. Here is a summary of the main script features:
 
 1. **Argument Parsing**: Defines configurations for the model, data, training, and optional LoRA parameters, all handled through data classes.
 2. **Data Preprocessing**: The script processes data either eagerly or lazily, offering flexibility in memory usage. The `preprocess` function prepares conversation-based datasets into input and target tensors.
@@ -128,7 +130,7 @@ This test evaluates whether the LoRA fine-tuning process using the generated dat
   - The fine-tuning script is executed using `torchrun` for distributed multi-GPU training.
   - Key parameters:
     - Batch size per GPU: `32`
-    - Gradient accumulation steps: `8`
+    - Gradient accumulation steps: `4`
     - Epochs: `5`
     - Learning rate: `3e-4`
     - Lazy preprocessing: Enabled.
