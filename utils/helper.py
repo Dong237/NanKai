@@ -179,7 +179,8 @@ PERIOD = 5  # seconds
     stop=stop_after_attempt(15),
     wait=wait_exponential(multiplier=1, min=4, max=40)
 )
-def llm_chat(user_prompt, system_prompt):
+def api_chat(model, tokenizer, user_prompt, system_prompt):
+    _, _ = model, tokenizer
     api_key = "Zhiyan123"
     model_name = "zhiyan-v2.6-chat-int8"
     url = f'http://192.168.200.211:8100/v1'

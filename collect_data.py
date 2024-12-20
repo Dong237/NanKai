@@ -4,7 +4,7 @@
 
 
 This script performs data collection and processing tasks by automatically looping through
-all existing .txt files in a folder and generating Q&A pairs based on the documents. 
+all existing files in a folder and generating Q&A pairs based on the documents. 
 
 The above process is performed sequentially for each document, and requires a local LLM.
 
@@ -16,8 +16,7 @@ Methods are inspired by the following works:
 
 import os
 import re
-
-
+import time
 import logging
 import argparse
 import jieba
@@ -31,6 +30,7 @@ from utils.helper import (
     read_docx_file,
     vllm_chat,
     hf_chat,
+    api_chat,
     closest_power_of_2,
     setup_logging,
     jsonl_append
@@ -101,8 +101,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def initialize_model_and_tokenizer(model_name_or_path: str, method: Literal["vllm", "hf"] = "vllm"):
+def initialize_model_and_tokenizer(model_name_or_path: str, method: Literal["vllm", "hf", "api"] = "vllm"):
     """Initializes and returns the model and tokenizer."""
+    # use api call, no need to load model and tokenizer
+    if method == "api":
+        return None, None
+    
     if method == "vllm":
         model = LLM(model_name_or_path, tensor_parallel_size=1)
     elif method == "hf":
@@ -122,6 +126,8 @@ def get_generate_function(model_type):
         generate_function = vllm_chat
     elif model_type == "hf":
         generate_function = hf_chat
+    elif model_type == "api":
+        generate_function = api_chat
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     return generate_function
@@ -323,7 +329,6 @@ def generate_qa_pairs_from_folder(
 
 
 if __name__ == "__main__":
-    import time
     start_time = time.time()
     print(time.strftime("%Y-%m-%d %H:%M:%S"))
     setup_logging()
